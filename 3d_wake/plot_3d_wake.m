@@ -151,3 +151,148 @@ view([-35, 22]);
 
 fprintf('Wake boundary defined at radius of peak velocity per depth.\n');
 fprintf('Rotate with mouse to explore. Wide at top = strong near-field, narrows below.\n');
+
+%% Interactive Slicing UI Feature
+% Create UI Panel at the bottom
+uipanel('Parent', fig, 'Position', [0.0 0.0 1.0 0.1], 'BackgroundColor', [0.15 0.15 0.2]);
+
+% Plane selection dropdown
+uicontrol('Style', 'text', 'Parent', fig, 'Units', 'normalized', ...
+          'Position', [0.02 0.04 0.08 0.03], 'String', 'Slice Plane:', ...
+          'ForegroundColor', 'w', 'BackgroundColor', [0.15 0.15 0.2], 'FontSize', 12);
+plane_menu = uicontrol('Style', 'popupmenu', 'Parent', fig, 'Units', 'normalized', ...
+                       'Position', [0.11 0.04 0.1 0.03], 'String', {'XY (Top-Down)', 'XZ (Side)', 'YZ (Front)'}, ...
+                       'FontSize', 11);
+
+% Slider control
+uicontrol('Style', 'text', 'Parent', fig, 'Units', 'normalized', ...
+          'Position', [0.25 0.04 0.05 0.03], 'String', 'Pos:', ...
+          'ForegroundColor', 'w', 'BackgroundColor', [0.15 0.15 0.2], 'FontSize', 12);
+slice_slider = uicontrol('Style', 'slider', 'Parent', fig, 'Units', 'normalized', ...
+                         'Position', [0.31 0.04 0.5 0.03], 'Min', 0, 'Max', 1, 'Value', 0.5);
+
+% Value text display
+val_text = uicontrol('Style', 'text', 'Parent', fig, 'Units', 'normalized', ...
+                     'Position', [0.83 0.04 0.08 0.03], 'String', '0.00', ...
+                     'ForegroundColor', 'w', 'BackgroundColor', [0.15 0.15 0.2], 'FontSize', 12);
+
+% Initialize slice plane object
+slice_patch = patch('XData', [], 'YData', [], 'ZData', [], ...
+                    'FaceColor', [1 0.2 0.2], 'FaceAlpha', 0.3, 'EdgeColor', 'r', 'LineWidth', 2);
+
+% Clipping controls
+enable_cut = uicontrol('Style', 'checkbox', 'Parent', fig, 'Units', 'normalized', ...
+                       'Position', [0.31 0.01 0.1 0.03], 'String', 'Enable Cut', ...
+                       'Value', 1, 'ForegroundColor', 'w', 'BackgroundColor', [0.15 0.15 0.2], ...
+                       'Callback', @(src,~) update_slice(src));
+                       
+flip_cut = uicontrol('Style', 'checkbox', 'Parent', fig, 'Units', 'normalized', ...
+                     'Position', [0.42 0.01 0.1 0.03], 'String', 'Flip Cut Side', ...
+                     'Value', 0, 'ForegroundColor', 'w', 'BackgroundColor', [0.15 0.15 0.2], ...
+                     'Callback', @(src,~) update_slice(src));
+
+% Get bounding box arrays to generate the plane
+x_min = min(X_surf(:)); x_max = max(X_surf(:));
+y_min = min(Y_surf(:)); y_max = max(Y_surf(:));
+z_min = min(z); z_max = max(z);
+
+% Find all surfaces and store their original data for clipping
+surfaces = findobj(ax, 'Type', 'Surface');
+for k = 1:numel(surfaces)
+    surfaces(k).UserData = struct('X', surfaces(k).XData, ...
+                                  'Y', surfaces(k).YData, ...
+                                  'Z', surfaces(k).ZData);
+end
+
+% Bundle handles into a struct and store on figure
+handles.plane_menu   = plane_menu;
+handles.slice_slider = slice_slider;
+handles.val_text     = val_text;
+handles.slice_patch  = slice_patch;
+handles.enable_cut   = enable_cut;
+handles.flip_cut     = flip_cut;
+handles.surfaces     = surfaces;
+handles.x_min = x_min; handles.x_max = x_max;
+handles.y_min = y_min; handles.y_max = y_max;
+handles.z_min = z_min; handles.z_max = z_max;
+guidata(fig, handles);
+
+% Update callbacks to fetch handles from guidata
+set(plane_menu,  'Callback', @(src,~) update_slider_limits(src));
+set(slice_slider,'Callback', @(src,~) update_slice(src));
+
+% Initialize state
+update_slider_limits(plane_menu);
+
+% Callbacks for UI interaction
+function update_slider_limits(src)
+    fig = ancestor(src, 'figure');
+    h = guidata(fig);
+    plane_idx = h.plane_menu.Value;
+    if plane_idx == 1 % XY plane (slides along Z axis)
+        set(h.slice_slider, 'Min', h.z_min, 'Max', h.z_max, 'Value', (h.z_min+h.z_max)/2);
+    elseif plane_idx == 2 % XZ plane (slides along Y axis)
+        set(h.slice_slider, 'Min', h.y_min, 'Max', h.y_max, 'Value', 0);
+    else % YZ plane (slides along X axis)
+        set(h.slice_slider, 'Min', h.x_min, 'Max', h.x_max, 'Value', 0);
+    end
+    update_slice(h.slice_slider);
+end
+
+function update_slice(src)
+    fig = ancestor(src, 'figure');
+    h = guidata(fig);
+    v = get(h.slice_slider, 'Value');
+    plane_idx = h.plane_menu.Value;
+    set(h.val_text, 'String', sprintf('%.2f', v));
+    
+    % Extra padding for plane visually
+    pad = 0.5; 
+    
+    if plane_idx == 1 % XY (Z = v)
+        h.slice_patch.XData = [h.x_min-pad h.x_max+pad h.x_max+pad h.x_min-pad];
+        h.slice_patch.YData = [h.y_min-pad h.y_min-pad h.y_max+pad h.y_max+pad];
+        h.slice_patch.ZData = [v v v v];
+    elseif plane_idx == 2 % XZ (Y = v)
+        h.slice_patch.XData = [h.x_min-pad h.x_max+pad h.x_max+pad h.x_min-pad];
+        h.slice_patch.YData = [v v v v];
+        h.slice_patch.ZData = [h.z_min-pad h.z_min-pad h.z_max+pad h.z_max+pad];
+    else % YZ (X = v)
+        h.slice_patch.XData = [v v v v];
+        h.slice_patch.YData = [h.y_min-pad h.y_max+pad h.y_max+pad h.y_min-pad];
+        h.slice_patch.ZData = [h.z_min-pad h.z_min-pad h.z_max+pad h.z_max+pad];
+    end
+    
+    % Apply clipping
+    do_cut = h.enable_cut.Value;
+    do_flip = h.flip_cut.Value;
+    
+    for k = 1:numel(h.surfaces)
+        orig_X = h.surfaces(k).UserData.X;
+        orig_Y = h.surfaces(k).UserData.Y;
+        orig_Z = h.surfaces(k).UserData.Z;
+        
+        if do_cut
+            % Find points to hide based on plane
+            if plane_idx == 1
+                mask = orig_Z < v;
+            elseif plane_idx == 2
+                mask = orig_Y < v;
+            else
+                mask = orig_X < v;
+            end
+            
+            if do_flip
+                mask = ~mask;
+            end
+            
+            % Hide vertices by replacing Z with NaN
+            new_Z = orig_Z;
+            new_Z(mask) = NaN;
+            set(h.surfaces(k), 'ZData', new_Z);
+        else
+            % Restore original
+            set(h.surfaces(k), 'ZData', orig_Z);
+        end
+    end
+end
