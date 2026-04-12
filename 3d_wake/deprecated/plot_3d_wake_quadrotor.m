@@ -1,8 +1,16 @@
-% 3D Wake Visualization - Quadrotor (4 individual rotor wakes)
-% Shows 4 distinct wake tubes, one per propeller
+% 3D Wake Visualization - Quadrotor (retuned geometry + convergence)
+% Supports:
+%   - current: legacy square layout
+%   - paper: inward-tilted, non-uniform rotor spacing layout
+%   - both: overlays both for direct comparison
 
 fprintf('\n=== Starting Quadrotor Wake Visualization ===\n');
 tic; % Start timer
+
+%% User-tunable model options
+drone_mode = 'both';        % 'current' | 'paper' | 'both'
+z_virtual_origin = -6.05;   % virtual origin in positive-down depth coordinates
+wake_blend = 0.70;          % 0=data-driven only, 1=virtual-origin model only
 
 %% Load PIV data from static folder
 fprintf('Loading PIV data...\n');
@@ -14,7 +22,8 @@ fprintf('  Data loaded: %dx%d grid\n', size(x_piv,1), size(x_piv,2));
 
 %% Extract unique 1D grid vectors
 r = unique(x_piv(:))'; % radial positions (treating x as radial distance from rotor center)
-z = unique(z_piv(:));  % depth levels
+z = unique(z_piv(:));  % depth levels (positive-down convention for modeling)
+z_vis = -z;            % visual convention for plotting (negative-down values)
 
 % Interpolate u_piv onto clean r/z grid
 [R_orig, Z_orig] = meshgrid(r, z);
@@ -22,82 +31,112 @@ u2d = griddata(x_piv(:), z_piv(:), u_piv(:), R_orig, Z_orig, 'linear');
 u2d(isnan(u2d)) = 0;
 
 n_z = length(z);
-n_r = length(r);
+n_r = length(r); %#ok<NASGU>
 
-%% For each depth, find the wake radius and peak velocity
+%% Extract wake radius profile and retune with virtual-origin correction
 % Only look at positive r (assuming axisymmetry per rotor)
 r_pos = r(r >= 0);
 u2d_pos = u2d(:, r >= 0);
 
-wake_radius = zeros(n_z, 1);
+wake_radius_data = zeros(n_z, 1);
 peak_velocity = zeros(n_z, 1);
 
 for zi = 1:n_z
     profile = u2d_pos(zi, :);
     peak_velocity(zi) = max(profile);
-    % Find wake edge at 10% of peak velocity
     idx = find(profile >= 0.1 * peak_velocity(zi), 1, 'last');
     if ~isempty(idx)
-        wake_radius(zi) = r_pos(idx);
+        wake_radius_data(zi) = r_pos(idx);
     end
 end
 
-wake_radius = smoothdata(wake_radius, 'movmean', 20);
+wake_radius_data = smoothdata(wake_radius_data, 'movmean', 20);
+
+% Force physically consistent expansion from a virtual origin (z0 = -6.05)
+zz = z - z_virtual_origin;
+zz(zz < 0) = 0;
+k = (zz' * wake_radius_data) / (zz' * zz + eps);
+wake_radius_virtual = k * zz;
+wake_radius_virtual = wake_radius_virtual - wake_radius_virtual(1) + wake_radius_data(1);
+
+% Blend measured profile with virtual-origin profile
+wake_radius = (1 - wake_blend) * wake_radius_data + wake_blend * wake_radius_virtual;
+wake_radius = smoothdata(max(wake_radius, 0), 'movmean', 12);
 fprintf('  Wake profile extracted (took %.2f sec)\n', toc);
 
-%% Quadrotor rotor positions (square configuration)
-% Typical arm length = 1.0 normalized units
-arm_length = 1.0;
-rotor_positions = arm_length / sqrt(2) * [
-     1,  1;  % Front-right
-     1, -1;  % Back-right
-    -1,  1;  % Front-left
-    -1, -1   % Back-left
-];
+%% Build drone configurations
+configs = build_drone_configs(drone_mode);
 
-%% Build 3D surfaces for each rotor
-n_angles = 40;  % angular resolution per rotor (reduced for faster rendering)
+%% Build 3D surfaces for each rotor in each configuration
+n_angles = 40;
 theta = linspace(0, 2*pi, n_angles);
 
-% Storage for all rotor surfaces
-X_rotors = cell(4, 1);
-Y_rotors = cell(4, 1);
-Z_rotors = cell(4, 1);
-C_rotors = cell(4, 1);
+X_rotors = {};
+Y_rotors = {};
+Z_rotors = {};
+C_rotors = {};
+rotor_meta = struct('cfg_idx', {}, 'rotor_idx', {});
 
-for rotor_idx = 1:4
-    % Center position of this rotor
-    rx0 = rotor_positions(rotor_idx, 1);
-    ry0 = rotor_positions(rotor_idx, 2);
+[TH, ~] = meshgrid(theta, 1:n_z);
 
-    % Create axisymmetric surface centered at this rotor
-    [TH, ~] = meshgrid(theta, 1:n_z);
-    X_rotors{rotor_idx} = rx0 + repmat(wake_radius, 1, n_angles) .* cos(TH);
-    Y_rotors{rotor_idx} = ry0 + repmat(wake_radius, 1, n_angles) .* sin(TH);
-    Z_rotors{rotor_idx} = repmat(z, 1, n_angles);
-    C_rotors{rotor_idx} = repmat(peak_velocity, 1, n_angles);
+for cfg_idx = 1:numel(configs)
+    cfg = configs(cfg_idx);
+
+    for rotor_idx = 1:size(cfg.rotor_positions, 1)
+        p0 = cfg.rotor_positions(rotor_idx, :);
+        base_xy = p0(1:2);
+        z_offset = p0(3);
+
+        inward_dir = -base_xy;
+        if norm(inward_dir) < eps
+            inward_dir = [0, 0];
+        else
+            inward_dir = inward_dir / norm(inward_dir);
+        end
+
+        axial_depth = (z - z(1));
+        center_shift = tand(cfg.tilt_deg) * axial_depth;
+        cx = base_xy(1) + inward_dir(1) * center_shift;
+        cy = base_xy(2) + inward_dir(2) * center_shift;
+
+        Xr = repmat(cx, 1, n_angles) + repmat(wake_radius, 1, n_angles) .* cos(TH);
+        Yr = repmat(cy, 1, n_angles) + repmat(wake_radius, 1, n_angles) .* sin(TH);
+        Zr = repmat(z_vis + z_offset, 1, n_angles);
+        Cr = repmat(peak_velocity, 1, n_angles);
+
+        X_rotors{end+1, 1} = Xr; %#ok<AGROW>
+        Y_rotors{end+1, 1} = Yr; %#ok<AGROW>
+        Z_rotors{end+1, 1} = Zr; %#ok<AGROW>
+        C_rotors{end+1, 1} = Cr; %#ok<AGROW>
+
+        rotor_meta(end+1).cfg_idx = cfg_idx; %#ok<AGROW>
+        rotor_meta(end).rotor_idx = rotor_idx;
+    end
 end
 
-%% Create grids for top caps of each rotor
-n_cap_r = 15;  % reduced for faster rendering
-cap_X = cell(4, 1);
-cap_Y = cell(4, 1);
-cap_Z = cell(4, 1);
-cap_C = cell(4, 1);
+%% Create top caps for each rotor
+n_cap_r = 15;
+cap_X = cell(numel(X_rotors), 1);
+cap_Y = cell(numel(X_rotors), 1);
+cap_Z = cell(numel(X_rotors), 1);
+cap_C = cell(numel(X_rotors), 1);
 
-for rotor_idx = 1:4
-    rx0 = rotor_positions(rotor_idx, 1);
-    ry0 = rotor_positions(rotor_idx, 2);
+[TH_cap, R_cap] = meshgrid(theta, linspace(0, wake_radius(1), n_cap_r));
+R_cap_flat = R_cap(:);
+cap_velocities = interp1(r_pos, u2d_pos(1,:), R_cap_flat, 'linear', 0);
+cap_color_template = reshape(cap_velocities, size(R_cap));
 
-    [TH_cap, R_cap] = meshgrid(theta, linspace(0, wake_radius(1), n_cap_r));
-    cap_X{rotor_idx} = rx0 + R_cap .* cos(TH_cap);
-    cap_Y{rotor_idx} = ry0 + R_cap .* sin(TH_cap);
-    cap_Z{rotor_idx} = ones(size(R_cap)) * z(1);
+for rotor_global_idx = 1:numel(X_rotors)
+    X0 = X_rotors{rotor_global_idx}(1, :);
+    Y0 = Y_rotors{rotor_global_idx}(1, :);
+    center_x = mean(X0);
+    center_y = mean(Y0);
+    center_z = Z_rotors{rotor_global_idx}(1, 1);
 
-    % Interpolate velocity at cap
-    R_cap_flat = R_cap(:);
-    cap_velocities = interp1(r_pos, u2d_pos(1,:), R_cap_flat, 'linear', 0);
-    cap_C{rotor_idx} = reshape(cap_velocities, size(R_cap));
+    cap_X{rotor_global_idx} = center_x + R_cap .* cos(TH_cap);
+    cap_Y{rotor_global_idx} = center_y + R_cap .* sin(TH_cap);
+    cap_Z{rotor_global_idx} = ones(size(R_cap)) * center_z;
+    cap_C{rotor_global_idx} = cap_color_template;
 end
 
 %% Plot setup
@@ -112,49 +151,42 @@ ax.YColor = [0.75 0.75 0.75];
 ax.ZColor = [0.75 0.75 0.75];
 hold on; grid on;
 
-% Color scheme for 4 rotors
-rotor_colors = [
-    0.95, 0.3, 0.3;   % Red-ish
-    0.3, 0.95, 0.3;   % Green-ish
-    0.3, 0.6, 0.95;   % Blue-ish
-    0.95, 0.7, 0.2    % Orange-ish
-];
+%% Plot all rotor wakes (possibly multiple drone models)
+surfaces = gobjects(numel(X_rotors), 1);
+caps = gobjects(numel(X_rotors), 1); %#ok<NASGU>
 
-%% Plot all 4 rotor wakes
-surfaces = gobjects(4, 1);
-caps = gobjects(4, 1);
+for rotor_global_idx = 1:numel(X_rotors)
+    cfg = configs(rotor_meta(rotor_global_idx).cfg_idx);
 
-for rotor_idx = 1:4
-    % Main wake tube
-    surfaces(rotor_idx) = surf(X_rotors{rotor_idx}, Y_rotors{rotor_idx}, ...
-                                Z_rotors{rotor_idx}, C_rotors{rotor_idx}, ...
-                                'EdgeColor', 'none', 'FaceAlpha', 0.85, 'Tag', 'main');
+    surfaces(rotor_global_idx) = surf(X_rotors{rotor_global_idx}, Y_rotors{rotor_global_idx}, ...
+                                      Z_rotors{rotor_global_idx}, C_rotors{rotor_global_idx}, ...
+                                      'EdgeColor', 'none', 'FaceAlpha', cfg.tube_alpha, 'Tag', 'main');
 
-    % Top cap
-    caps(rotor_idx) = surf(cap_X{rotor_idx}, cap_Y{rotor_idx}, ...
-                            cap_Z{rotor_idx}, cap_C{rotor_idx}, ...
-                            'EdgeColor', 'none', 'FaceAlpha', 0.90, 'Tag', 'main');
+    caps(rotor_global_idx) = surf(cap_X{rotor_global_idx}, cap_Y{rotor_global_idx}, ...
+                                  cap_Z{rotor_global_idx}, cap_C{rotor_global_idx}, ...
+                                  'EdgeColor', 'none', 'FaceAlpha', cfg.cap_alpha, 'Tag', 'main');
 end
 
-%% Add rotor markers at drone level
-for rotor_idx = 1:4
-    rx = rotor_positions(rotor_idx, 1);
-    ry = rotor_positions(rotor_idx, 2);
-    plot3(rx, ry, z(1)-0.2, 'wo', 'MarkerSize', 12, ...
-          'MarkerFaceColor', rotor_colors(rotor_idx,:), 'LineWidth', 2);
+%% Add rotor markers and body outlines for each configuration
+for cfg_idx = 1:numel(configs)
+    cfg = configs(cfg_idx);
+    rp = cfg.rotor_positions;
+
+    for rotor_idx = 1:size(rp, 1)
+          plot3(rp(rotor_idx, 1), rp(rotor_idx, 2), z_vis(1) + rp(rotor_idx, 3) - 0.2, ...
+              'wo', 'MarkerSize', 10, 'MarkerFaceColor', cfg.marker_color, 'LineWidth', 1.8);
+    end
+
+    % Rotor order: FR, FL, BR, BL -> outline around perimeter
+    order = [1 2 4 3 1];
+    drone_x = rp(order, 1)';
+    drone_y = rp(order, 2)';
+    drone_z = (z_vis(1) - 0.2) + rp(order, 3)';
+    plot3(drone_x, drone_y, drone_z, cfg.body_line_style, 'Color', cfg.body_color, 'LineWidth', 2.3);
+
+    text(mean(rp(:,1)), mean(rp(:,2)), z_vis(1) - 0.9 + mean(rp(:,3)), cfg.label, ...
+         'Color', cfg.body_color, 'FontSize', 12, 'FontWeight', 'bold', 'HorizontalAlignment', 'center');
 end
-
-% Drone body outline (square connecting rotors)
-drone_x = [rotor_positions(1,1), rotor_positions(2,1), rotor_positions(4,1), ...
-           rotor_positions(3,1), rotor_positions(1,1)];
-drone_y = [rotor_positions(1,2), rotor_positions(2,2), rotor_positions(4,2), ...
-           rotor_positions(3,2), rotor_positions(1,2)];
-drone_z = ones(size(drone_x)) * (z(1) - 0.2);
-plot3(drone_x, drone_y, drone_z, 'w-', 'LineWidth', 2.5);
-
-% Label
-text(0, 0, z(1)-0.8, 'Quadrotor', 'Color', 'white', 'FontSize', 14, ...
-     'FontWeight', 'bold', 'HorizontalAlignment', 'center');
 
 %% Colormap and colorbar
 fprintf('  Surfaces rendered (took %.2f sec total)\n', toc);
@@ -168,12 +200,13 @@ cb.Label.Rotation = 270;
 cb.Label.Position(1) = 3.5;
 
 %% Styling
-set(gca, 'ZDir', 'reverse', 'FontSize', 12);
+set(gca, 'FontSize', 12);
 axis equal;
 xlabel('$x/l$', 'Interpreter', 'latex', 'FontSize', 14, 'Color', [0.85 0.85 0.85]);
 ylabel('$y/l$', 'Interpreter', 'latex', 'FontSize', 14, 'Color', [0.85 0.85 0.85]);
-zlabel('$\Delta z/l$ (depth below drone)', 'Interpreter', 'latex', 'FontSize', 14, 'Color', [0.85 0.85 0.85]);
-title('3D Wake Boundary — Quadrotor (4 Individual Rotors)', 'FontSize', 16, 'Color', 'white', 'FontWeight', 'bold');
+zlabel('$z/l$ (negative values are below drone)', 'Interpreter', 'latex', 'FontSize', 14, 'Color', [0.85 0.85 0.85]);
+title(sprintf('3D Wake Boundary — Quadrotor (%s model)', upper(drone_mode)), ...
+    'FontSize', 16, 'Color', 'white', 'FontWeight', 'bold');
 
 camlight('headlight');
 camlight('right');
@@ -220,7 +253,8 @@ all_X = cell2mat(cellfun(@(x) x(:), X_rotors, 'UniformOutput', false));
 all_Y = cell2mat(cellfun(@(x) x(:), Y_rotors, 'UniformOutput', false));
 x_min = min(all_X); x_max = max(all_X);
 y_min = min(all_Y); y_max = max(all_Y);
-z_min = min(z); z_max = max(z);
+all_Z = cell2mat(cellfun(@(x) x(:), Z_rotors, 'UniformOutput', false));
+z_min = min(all_Z); z_max = max(all_Z);
 
 % Store original data for clipping
 all_surfaces = findobj(ax, 'Type', 'Surface');
@@ -321,3 +355,63 @@ fprintf('\n=== Figure is now open ===\n');
 fprintf('Total time: %.2f seconds\n', toc);
 fprintf('Interact with the visualization using the controls at the bottom.\n');
 fprintf('Close the figure window when done.\n\n');
+
+%% Local helper: drone configurations
+function cfgs = build_drone_configs(mode)
+    mode = lower(string(mode));
+
+    % --- Current (legacy) model ---
+    arm_length = 1.0;
+    rp_current_xy = arm_length / sqrt(2) * [
+         1,  1;  % Front-right
+        -1,  1;  % Front-left
+         1, -1;  % Back-right
+        -1, -1   % Back-left
+    ];
+    rp_current = [rp_current_xy, zeros(4,1)];
+
+    current_cfg = struct( ...
+        'label', 'Current', ...
+        'rotor_positions', rp_current, ...
+        'tilt_deg', 0.0, ...
+        'tube_alpha', 0.82, ...
+        'cap_alpha', 0.88, ...
+        'body_color', [0.95 0.95 0.95], ...
+        'marker_color', [0.70 0.85 1.00], ...
+        'body_line_style', '-');
+
+    % --- Paper-inspired model ---
+    D = 2.0;  % normalized by rotor radius R, so D = 2R = 2.0
+    front_sep = 1.35 * D;
+    back_sep = 1.17 * D;
+    body_longitudinal_sep = 1.25 * D;
+    dz_fb = 0.18 * D;
+    y_front = +body_longitudinal_sep / 2;
+    y_back = -body_longitudinal_sep / 2;
+
+    rp_paper = [
+        +front_sep/2, y_front, +dz_fb/2;  % Front-right (higher)
+        -front_sep/2, y_front, +dz_fb/2;  % Front-left  (higher)
+        +back_sep/2,  y_back,  -dz_fb/2;  % Back-right  (lower)
+        -back_sep/2,  y_back,  -dz_fb/2   % Back-left   (lower)
+    ];
+
+    paper_cfg = struct( ...
+        'label', 'Paper-inspired', ...
+        'rotor_positions', rp_paper, ...
+        'tilt_deg', 4.5, ...
+        'tube_alpha', 0.58, ...
+        'cap_alpha', 0.65, ...
+        'body_color', [1.00 0.85 0.30], ...
+        'marker_color', [1.00 0.80 0.35], ...
+        'body_line_style', '--');
+
+    switch mode
+        case "current"
+            cfgs = current_cfg;
+        case "paper"
+            cfgs = paper_cfg;
+        otherwise
+            cfgs = [current_cfg, paper_cfg];
+    end
+end
