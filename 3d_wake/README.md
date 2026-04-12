@@ -3,8 +3,34 @@
 This has old matlab files that 
 ->matlab file that plotted the wake in a very abstracted manner using cyilinders with varying axial ranges
 ->matlab file to simulate air particles
+# Formulas Used
+Contains a picture of the formula that is used for the near field
+# Related Images
+Contains images from https://doi.org/10.1007/s00348-024-03880-3
+# Results
+Contains images from different phases
 
-# Variables Being Used
+## Phases
+# Phase 1
+near_field_plot.m uses the data from /static (velocities) to plot wake + uses the guassian model (/formulas-used) to compare
+# Phase 2
+near_field_z_loop_plot.m used the data from /static to plot wake amplitude and wake spread over the spread
++
+another model that shows the normalized x axis, normalized velocity + depth
+vvvvvvvvv
+iterates over the z axis for this information
+# Phase 3
+plots the wake over 3d dimensions
+# Notes
+this is data for 2 rotors 
+0         0
+
+   center
+------------
+0         0
+------------
+
+## Variables Being Used
 x_piv, z_piv, u_piv (axial velocity), and v_piv (lateral velocity)
 
 ## What is a sigmoid curve? 
@@ -28,7 +54,6 @@ Exactly. You’ve visualized the fluid dynamics here perfectly. At z/R = -0.8, y
 at -0.8 z/R, wake is just right under the rotor. the view of the air would be like four seperate rings from the top view and like two upside down M's from the side view
 
 ## Roadmap to 3D (before code)
-
 1. The Z-Sweep (Depth Mapping)
 Currently, the script (near_field_plot.m) only looks at z/R = -0.8. It needs to wrap lsqcurvefit logic in a for loop that iterates through every available depth slice in the static data. Store the optimized p array (Amplitude, Spread, etc.) for every z level
 
