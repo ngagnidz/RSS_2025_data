@@ -118,34 +118,31 @@ sigma_func = @(z) polyval(sigma_params, z);
 
 disp('Generating 3D Volumetric Field...');
 
-% --- 3. BUILD THE 3D REVOLVE ---
-% Define the spatial grid for our 3D space
-% X and Y cover the horizontal area, Z covers the depth
+% --- 3. BUILD THE 3D REVOLVE (CORRECTED) ---
 [X, Y, Z] = meshgrid(linspace(-4, 4, 100), linspace(-4, 4, 100), linspace(-3, 0, 100));
 
-% Evaluate our dynamic A and Sigma across the entire 3D grid based on depth
 A_grid = A_func(Z);
 Sigma_grid = sigma_func(Z);
-
-% Define rotor centers and radius (using parameters from your 2D model)
 R = 1.0; 
-x_left = -1.35; 
-x_right = 1.35;
-y_center = 0; % Assuming symmetric alignment along the Y axis
 
-% Calculate Euclidean radial distances from the center of each rotor
-r_left = sqrt((X - x_left).^2 + (Y - y_center).^2);
-r_right = sqrt((X - x_right).^2 + (Y - y_center).^2);
+% 1. Position the 4 rotors in an "X" layout.
+% Since your diagonal distance to the rotors was 1.35, the X/Y coordinates are 1.35 / sqrt(2) = 0.954
+d = 0.954; 
 
-% Apply the 4-peak model radially to create the 3D downwash field
-% This generates the annular (ring) shapes under the left and right rotors
+% Calculate Euclidean radial distances from the center of each of the 4 rotors
+r_FR = sqrt((X - d).^2 + (Y - d).^2);   % Front-Right
+r_FL = sqrt((X + d).^2 + (Y - d).^2);   % Front-Left
+r_BR = sqrt((X - d).^2 + (Y + d).^2);   % Back-Right
+r_BL = sqrt((X + d).^2 + (Y + d).^2);   % Back-Left
+
+% 2. Apply the true 3D ring equation to all 4 rotors
+% A 3D ring is just ONE Gaussian based on radial distance from its center
 U_3D = A_grid .* ( ...
-    exp(-((r_left - R).^2) ./ (2 * Sigma_grid.^2)) + ... 
-    exp(-((r_left + R).^2) ./ (2 * Sigma_grid.^2)) + ... 
-    exp(-((r_right - R).^2) ./ (2 * Sigma_grid.^2)) + ...
-    exp(-((r_right + R).^2) ./ (2 * Sigma_grid.^2))      ...
+    exp(-((r_FR - R).^2) ./ (2 * Sigma_grid.^2)) + ... 
+    exp(-((r_FL - R).^2) ./ (2 * Sigma_grid.^2)) + ... 
+    exp(-((r_BR - R).^2) ./ (2 * Sigma_grid.^2)) + ... 
+    exp(-((r_BL - R).^2) ./ (2 * Sigma_grid.^2))       ...
 );
-
 % --- 4. VISUALIZE THE 3D WAKE ---
 figure(3); hold on;
 
