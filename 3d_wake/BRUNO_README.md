@@ -26,9 +26,8 @@ this is data for 2 rotors
 0         0
 
    center
-------------
+
 0         0
-------------
 
 ## Variables Being Used
 x_piv, z_piv, u_piv (axial velocity), and v_piv (lateral velocity)
@@ -114,3 +113,48 @@ What is Wake Spread (sigma)? Spread is the width/thickness of the wake ring. You
 
 ## What is Downwash
 Imagine you have a toy drone flying above you. When it spins its blades, it pushes air downward. That downward wind is called downwash. 
+
+## What is Vena Contracta
+vena contracta refers to the narrowest, most contracted part of the downwash or wake stream produced by a rotor, where the wake achieves its minimum diameter and maximum velocity
+
+## What is Warm Starting?
+- After each z slice is fitted, the code does the following:
+initial_guess = fitted_params;
+- This takes the solution from the current slice and uses it as a starting point for the next slice. Idea is that the adjacant depths should have similar parameters
+The problem is sigma (the peak width) is also being warm-started. At deep slices (z/l > 1.0) where the wake is diffuse, the optimizer finds a large sigma. That large sigma then gets passed as the starting guess to shallower slices, where the peaks are actually very sharp. The optimizer starts from the wrong end of the search space and gets stuck at a wide, flat solution instead of finding the sharp, tall one the data actually shows.
+
+The fix is to warm-start the amplitudes and positions (which do evolve smoothly with depth) but reset sigma to a fresh small value each iteration
+
+## What is RMSE?
+Root Mean Square Error -  single num that sums how far off predictions are from actual measured vals
+formula: RMSE = sqrt( mean( (predicted - actual)^2 ) )
+So if your velocity measurements are in m/s and RMSE = 0.05, your model is off by about 0.05 m/s on average.
+Lower RMSE = better fit. A RMSE near zero means the model almost perfectly matches the data. 
+
+## Why check data using RMSE?
+To check how far away the gaussian model is from the actual points
+load(fullfile(data_dir, 'x_piv.mat'));
+load(fullfile(data_dir, 'z_piv.mat'));
+load(fullfile(data_dir, 'u_piv.mat'));
+
+## Notes On Nika's Model
+*Has two gaussian curves with independnet amplitues and independent radii
+*Bruno: has 4 peaks that share same sigma and amplitude
+*csv shows R^2 climbing from ~0.906 at z=1.0 to ~0.96 at z=3.5 (model is getting better the farther it goes down)
+*Bruno: opposite for me
+
+# Going from 21.6 RMSE z from 0 to 1.8
+- Split the model into independent inner/outer peaks 
+Model — p(1) is now A_inner (for the two peaks closer to the quadrotor center) and p(2) is A_outer (for the two peaks at the blade tips). They evolve independently as depth increases.
+Parameters — went from 5 to 6: [A_inner, A_outer, sigma, X_left, X_right, R]
+Amplitude plot — now shows two lines (red = inner, blue = outer) so you can see if one decays faster than the other, which is exactly what Nika observes (her Ai and Ao have different decay lengths λ).
+RMSE normalization — now uses the average of both amplitudes as the reference.
+RMSE dropped from 0.0194 → 0.0145 and normalized from 21.6% → 18.6%. (diagnostic/)
+
+## Analysis
+The data only shows 2 peaks, not 4 — at this shallow depth the outer blade tip rings haven't fully formed yet, but the model is still trying to place 4 peaks. It's compromising the inner peak heights to avoid creating large errors with the 2 "ghost" outer peaks
+The peaks are asymmetric — left peak is taller than the right, but the model treats both sides identically
+There's massive noise from x=2 to x=9 — all those scattered points to the right are PIV measurement noise from the rotor obstruction zone. The optimizer is including them in the fit, which pulls the solution away from matching the actual peaks
+
+## Meeting Notes Today:
+-Mine models z=0 to 3.0 models z=1.0 to 3.5 while his models 

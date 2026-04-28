@@ -59,3 +59,5 @@ The width/thickness of the wake ring.
 * **z/R ≈ 0:** Spread is approx 0.55 -> matches the physical width of the spinning blade.
 * **z/R ≈ -0.6 (The Dip):** Spread shrinks to its min (~0.28) -> aligns with the amplitude peak as the wake contracts and thins out.
 * **z/R < -1.6 (Deep Down):** Spread shoots up -> turbulent mixing causes the wake to expand outward. The individual rotor rings wash out and merge into a single circular wake structure (transitioning from near-field -> far-field).
+
+https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.RectBivariateSpline.html

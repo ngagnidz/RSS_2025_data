@@ -17,7 +17,8 @@ num_depths = length(near_field_z);
 
 % prepare an array to store our fitted parameters for each depth
 % columns will be: [Z_depth, Amplitude, Sigma, X_left, X_right, Radius]
-z_sweep_results = zeros(num_depths, 6);
+% columns will be: [Z_depth, Amplitude, Sigma, X_left, X_right, Radius, RMSE]
+z_sweep_results = zeros(num_depths, 7);
 
 % define 4-peak Gaussian sum model
 near_field_model = @(p, x) p(1) * ( ...
@@ -59,8 +60,11 @@ for i = 1:num_depths
     if length(x_slice) > 20
         % run curve fit
         fitted_params = lsqcurvefit(near_field_model, initial_guess, x_slice, u_slice, lb, ub, options);
+        % compute RMSE against the raw PIV slice
+        u_fitted_slice = near_field_model(fitted_params, x_slice);
+        rmse = sqrt(mean((u_slice - u_fitted_slice).^2));
         % store results
-        z_sweep_results(i, :) = [current_z, fitted_params];
+        z_sweep_results(i, :) = [current_z, fitted_params, rmse];
         % update the initial guess for the next deeper slice
         initial_guess = fitted_params;
         % plot fitted curve as a line in the 3D waterfall plot
